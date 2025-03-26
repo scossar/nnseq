@@ -39,7 +39,7 @@ typedef struct _nnseq {
 
 t_symbol* activation_to_symbol(t_layer *l);
 void set_layer_activation(t_nnseq *x, t_symbol *s, int argc, t_atom *argv);
-void get_layer_info(t_nnseq *x);
+void model_info(t_nnseq *x);
 t_float apply_activation(t_nnseq *x, t_int l, t_float z);
 float he_init(int n_prev);
 void init_layer_weights(t_nnseq *x, t_int l);

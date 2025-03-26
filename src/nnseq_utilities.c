@@ -51,7 +51,7 @@ void set_layer_activation(t_nnseq *x, t_symbol *s, int argc, t_atom *argv)
   }
 }
 
-void get_layer_info(t_nnseq *x)
+void model_info(t_nnseq *x)
 {
   post("Model has %d layers", x->num_layers);
   post("Batch size: %d", x->batch_size);
