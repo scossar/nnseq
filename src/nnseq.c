@@ -16,21 +16,39 @@ static void nnseq_free(t_nnseq *x)
 
   if (x->layers != NULL) {
     for (int i = 0; i < x->num_layers; i++) {
+
+      // weights and dw
       if (x->layers[i].weights != NULL) {
         freebytes(x->layers[i].weights, x->layers[i].n * x->layers[i].n_prev *
                 sizeof(t_float));
       }
+      if (x->layers[i].dw != NULL) {
+        freebytes(x->layers[i].dw, x->layers[i].n * x->layers[i].n_prev *
+                sizeof(t_float));
+      }
 
+      // biases and db
       if (x->layers[i].biases != NULL) {
         freebytes(x->layers[i].biases, x->layers[i].n * sizeof(t_float));
       }
+      if (x->layers[i].db != NULL) {
+        freebytes(x->layers[i].db, x->layers[i].n * sizeof(t_float));
+      }
 
+      // z and dz
       if (x->layers[i].z_cache != NULL) {
         freebytes(x->layers[i].z_cache, x->layers[i].n * x->batch_size * sizeof(t_float));
       }
+      if (x->layers[i].dz != NULL) {
+        freebytes(x->layers[i].dz, x->layers[i].n * x->batch_size * sizeof(t_float));
+      }
 
+      // a and da
       if (x->layers[i].a_cache != NULL) {
         freebytes(x->layers[i].a_cache, x->layers[i].n * x->batch_size * sizeof(t_float));
+      }
+      if (x->layers[i].da != NULL) {
+        freebytes(x->layers[i].da, x->layers[i].n * x->batch_size * sizeof(t_float));
       }
     }
     freebytes(x->layers, x->num_layers * sizeof(t_layer));
@@ -202,9 +220,19 @@ static int init_layers(t_nnseq *x)
       pd_error(x, "nnseq: failed to allocate memory for layer weights");
       return 0;
     }
+    layer->dw = (t_float *)getbytes(sizeof(t_float) * layer->n * layer->n_prev);
+    if (layer->dw == NULL) {
+      pd_error(x, "nnseq: failed to allocate memory for layer dw");
+      return 0;
+    }
     layer->biases = (t_float *)getbytes(sizeof(t_float) * layer->n);
     if (layer->biases == NULL) {
       pd_error(x, "nnseq: failed to allocate memory for layer biases");
+      return 0;
+    }
+    layer->db = (t_float *)getbytes(sizeof(t_float) * layer->n);
+    if (layer->db == NULL) {
+      pd_error(x, "nnseq: failed to allocate memory for layer db");
       return 0;
     }
     layer->z_cache = (t_float *)getbytes(sizeof(t_float) * layer->n * x->batch_size);
@@ -212,9 +240,19 @@ static int init_layers(t_nnseq *x)
       pd_error(x, "nnseq: failed to allocate memory for layer z_cache");
       return 0;
     }
+    layer->dz = (t_float *)getbytes(sizeof(t_float) * layer->n * x->batch_size);
+    if (layer->dz == NULL) {
+      pd_error(x, "nnseq: failed to allocate memory for layer dz");
+      return 0;
+    }
     layer->a_cache = (t_float *)getbytes(sizeof(t_float) * layer->n * x->batch_size);
     if (layer->a_cache == NULL) {
-      pd_error(x, "nnseq: failed to allocate memory for a_cache");
+      pd_error(x, "nnseq: failed to allocate memory for layer a_cache");
+      return 0;
+    }
+    layer->da = (t_float *)getbytes(sizeof(t_float) * layer->n * x->batch_size);
+    if (layer->da == NULL) {
+      pd_error(x, "nnseq: failed to allocate memory for layer da");
       return 0;
     }
 
@@ -246,6 +284,13 @@ static void layer_forward(t_nnseq *x, t_int l, t_float *input)
       layer->a_cache[idx] = apply_activation(x, l, z);
     }
   }
+}
+
+static void dz_outer(t_nnseq *x)
+{
+  /*t_layer *outer_layer = &x->layers[x->num_layers - 1];*/
+  post("outer layer info");
+  /*post("n: %d, n_prev: %d", outer_layer->n, outer_layer->n_prev);*/
 }
 
 static void model_forward(t_nnseq *x)
@@ -347,4 +392,8 @@ void nnseq_setup(void)
                   gensym("get_x"), 0);
   class_addmethod(nnseq_class, (t_method)get_y_labels,
                   gensym("get_y"), 0);
+
+  // tmp
+  class_addmethod(nnseq_class, (t_method)dz_outer,
+                  gensym("dz_outer"), 0);
 }

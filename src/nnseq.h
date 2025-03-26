@@ -16,9 +16,13 @@ typedef struct _layer {
   t_activation_type activation;
 
   t_float *weights;
+  t_float *dw;
   t_float *biases;
+  t_float *db;
   t_float *z_cache;
+  t_float *dz;
   t_float *a_cache;
+  t_float *da;
 } t_layer;
 
 typedef struct _nnseq {
