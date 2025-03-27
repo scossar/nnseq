@@ -35,13 +35,17 @@ typedef struct _nnseq {
   t_float alpha;
   t_float leak;
 
+  int iterator; // Current step in the sequence
+
   t_layer *layers;
 
   t_float *x_input;
   t_float *y_labels;
 
   t_inlet *input_inlet;
-  t_outlet *output_outlet;
+  t_outlet *info_outlet; // general purpose outlet
+  t_outlet **layer_outlets; // array of outlets for layer activations
+  int num_outlets; // number of layer outlets
 } t_nnseq;
 
 t_symbol* activation_to_symbol(t_layer *l);
