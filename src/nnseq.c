@@ -61,10 +61,6 @@ static void nnseq_free(t_nnseq *x)
     freebytes(x->layer_dims, (x->num_layers + 1) * sizeof(int));
   }
 
-  if (x->info_outlet != NULL) {
-    outlet_free(x->info_outlet);
-  }
-
   if (x->layer_outlets != NULL) {
     freebytes(x->layer_outlets, x->num_outlets * sizeof(t_outlet *));
   }
@@ -177,7 +173,7 @@ static void get_x_input(t_nnseq *x)
     SETFLOAT(&out_atoms[i], x->x_input[i]);
   }
   
-  outlet_list(x->info_outlet, gensym("list"), x_size, out_atoms);
+  outlet_list(x->layer_outlets[0], gensym("list"), x_size, out_atoms);
   freebytes(out_atoms, x_size * sizeof(t_atom));
 }
 
@@ -196,7 +192,7 @@ static void get_y_labels(t_nnseq *x)
     SETFLOAT(&out_atoms[i], x->y_labels[i]);
   }
 
-  outlet_list(x->info_outlet, gensym("list"), y_label_size, out_atoms);
+  outlet_list(x->layer_outlets[0], gensym("list"), y_label_size, out_atoms);
   freebytes(out_atoms, y_label_size * sizeof(t_atom));
 }
 
@@ -503,6 +499,7 @@ static void model_backward(t_nnseq *x)
   }
 }
 
+// NOTE: this will crash Pd if backprop hasn't been run yet
 static t_float compute_cost(t_nnseq *x)
 {
   t_float cost = 0.0;
@@ -522,21 +519,21 @@ static t_float compute_cost(t_nnseq *x)
 static void get_cost(t_nnseq *x)
 {
   t_float cost = compute_cost(x);
-  outlet_float(x->info_outlet, cost);
+  outlet_float(x->layer_outlets[0], cost);
 }
 
-// NOTE: the info_outlet is causing some confusion here. Probably use an offset
-// so that the left-most inlet is reserved for info. Deal with later?
 static void nnseq_bang(t_nnseq *x)
 {
   model_forward(x);
   model_backward(x);
   update_parameters(x);
 
-  // output activations from (some) layers
-  for (int i = 0; i < x->num_outlets; i++) {
-    int layer_idx = x->num_layers - 1 - i;
-    post("layer index from bang method: %d", layer_idx);
+  // layer activations (outlets 1 through num_outlets - 1)
+  // the output layer will be at layer_outlets[1] (second left most outlet)
+  // the second to last layer will be at layer_outlets[2], etc
+  for (int i = 1; i < x->num_outlets; i++) {
+    int layer_idx = x->num_layers - (i - 1) - 1;
+    post("layer_index: %d, outlet_index %d", layer_idx, i);
     if (layer_idx < 0) break; // just in case
 
     t_layer *layer = &x->layers[layer_idx];
@@ -601,18 +598,18 @@ static void *nnseq_new(t_symbol *s, int argc, t_atom *argv)
   x->leak = 0.01; // default
 
   // dynamic outlets (first attempt)
-  x->num_outlets = x->num_layers > 4 ? 4 : x->num_layers;
+  x->num_outlets = x->num_layers > 8 ? 8 : x->num_layers + 1;
 
   // an array of outlets
   x->layer_outlets = (t_outlet **)getbytes(x->num_outlets * sizeof(t_outlet *));
 
-  // create outlets from right to left
-  for (int i = x->num_outlets - 1; i >= 0; i--) {
+  // create outlet for any type of message (leftmost outlet)
+  x->layer_outlets[0] = outlet_new(&x->x_obj, &s_list);
+
+  // create outlets for activations from right to left
+  for (int i = 1; i < x->num_outlets; i++) {
     x->layer_outlets[i] = outlet_new(&x->x_obj, &s_float);
   }
-
-  // far left outlet (I think)
-  x->info_outlet = outlet_new(&x->x_obj, &s_list);
 
   x->iterator = 0; // tracks the current iteration
 
