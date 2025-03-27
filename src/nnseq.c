@@ -1,4 +1,5 @@
 #include "nnseq.h"
+#include <m_pd.h>
 
 static t_class *nnseq_class = NULL;
 
@@ -502,11 +503,35 @@ static void layer_backward(t_nnseq *x, int l)
   }
 }
 
+// for Adam and momentum, see flattened_matrix_multiplication_with_transforms.md
+// (~ line 756)
 static void model_backward(t_nnseq *x)
 {
   for (int l = x->num_layers - 1; l >= 0; l--) {
     layer_backward(x, l);
   }
+}
+
+static t_float compute_cost(t_nnseq *x)
+{
+  t_float cost = 0.0;
+  t_layer *output_layer = &x->layers[x->num_layers - 1];
+  int output_size = output_layer->n;
+
+  for (int i = 0; i < output_size; i++) {
+    for (int j = 0; j < x->batch_size; j++) {
+      int idx = i * x->batch_size + j;
+      t_float diff = output_layer->a_cache[idx] - x->y_labels[idx];
+      cost += diff * diff;
+    }
+  }
+  return cost / (2.0 * x->batch_size);
+}
+
+static void get_cost(t_nnseq *x)
+{
+  t_float cost = compute_cost(x);
+  outlet_float(x->output_outlet, cost);
 }
 
 static void nnseq_bang(t_nnseq *x)
@@ -564,7 +589,6 @@ static void *nnseq_new(t_symbol *s, int argc, t_atom *argv)
   return (void *)x;
 }
 
-
 void nnseq_setup(void)
 {
   nnseq_class = class_new(gensym("nnseq"),
@@ -590,7 +614,6 @@ void nnseq_setup(void)
   class_addmethod(nnseq_class, (t_method)get_y_labels,
                   gensym("get_y"), 0);
 
-  // tmp
-  class_addmethod(nnseq_class, (t_method)da_outer,
-                  gensym("dz_outer"), 0);
+  class_addmethod(nnseq_class, (t_method)get_cost,
+                  gensym("cost"), 0);
 }

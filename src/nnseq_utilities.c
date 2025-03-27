@@ -65,19 +65,29 @@ void model_info(t_nnseq *x)
     post("activation: %s", activation_to_symbol(layer)->s_name);
 
     // commenting this out because it makes the output unreadable
-    /*if (layer->a_cache) {*/
-    /*  post("Layer activations:");*/
-    /*  int activations_size = layer->n * x->batch_size;*/
-    /*  for (int j = 0; j < activations_size; j++) {*/
-    /*    post("a_cache[%d]: %f", j, layer->a_cache[j]);*/
-    /*  }*/
-    /*} else {*/
-    /*  post("activations cache not allocated");*/
-    /*}*/
+    if (layer->a_cache) {
+      post("Layer activations:");
+      int activations_size = layer->n * x->batch_size;
+      for (int j = 0; j < activations_size; j++) {
+        post("a_cache[%d]: %f", j, layer->a_cache[j]);
+      }
+    } else {
+      post("activations cache not allocated");
+    }
+
+    if (layer->z_cache) {
+      post("Layer activations:");
+      int z_size = layer->n * x->batch_size;
+      for (int j = 0; j < z_size; j++) {
+        post("z_cache[%d]: %f", j, layer->z_cache[j]);
+      }
+    } else {
+      post("activations cache not allocated");
+    }
 
     if (layer->weights) {
       post("Sample weights (first 3 or fewer):");
-      int sample_size = layer->n * layer->n_prev < 3 ? layer->n * layer->n_prev : 3;
+      int sample_size = layer->n * layer->n_prev < 5 ? layer->n * layer->n_prev : 4;
       for (int j = 0; j < sample_size; j++) {
         post("weight[%d]: %f", j, layer->weights[j]);
         }
@@ -87,7 +97,7 @@ void model_info(t_nnseq *x)
 
     if (layer->biases) {
       post("sample biases (first 3 or fewer):");
-      int sample_size = layer->n < 3 ? layer->n : 3;
+      int sample_size = layer->n < 5 ? layer->n : 4;
       for (int j = 0; j < sample_size; j++) {
         post("bias[%d]: %f", j, layer->biases[j]);
       }
