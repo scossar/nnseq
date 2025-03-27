@@ -34,6 +34,7 @@ typedef struct _nnseq {
   int batch_size;
   t_float alpha;
   t_float leak;
+  t_float lambda;
 
   int iterator; // Current step in the sequence
 

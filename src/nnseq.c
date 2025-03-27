@@ -383,6 +383,11 @@ static void set_leak(t_nnseq *x, t_floatarg f)
   x->leak = f;
 }
 
+static void set_lambda(t_nnseq *x, t_floatarg f)
+{
+  x->lambda = f;
+}
+
 static void calculate_dw(t_nnseq *x, int l, t_layer *layer)
 {
   int n_neurons = layer->n;
@@ -471,6 +476,24 @@ static void update_parameters(t_nnseq *x)
   }
 }
 
+static void update_parameters_with_l2(t_nnseq *x)
+{
+  for (int l = 0; l < x->num_layers; l++) {
+    t_layer *layer = &x->layers[l];
+    int n_neurons = layer->n;
+    int n_inputs = layer->n_prev;
+
+    for (int i = 0; i < n_neurons * n_inputs; i++) {
+      layer->weights[i] -= x->alpha * layer->dw[i] + x->lambda * layer->weights[i];
+    }
+
+    for (int i = 0; i < n_neurons; i++) {
+      layer->biases[i] -= x->alpha * layer->db[i];
+    }
+  }
+
+}
+
 static void layer_backward(t_nnseq *x, int l)
 {
   t_layer *current_layer = &x->layers[l];
@@ -526,14 +549,15 @@ static void nnseq_bang(t_nnseq *x)
 {
   model_forward(x);
   model_backward(x);
-  update_parameters(x);
+  // TODO: make this configurable
+  /*update_parameters(x);*/
+  update_parameters_with_l2(x);
 
   // layer activations (outlets 1 through num_outlets - 1)
   // the output layer will be at layer_outlets[1] (second left most outlet)
   // the second to last layer will be at layer_outlets[2], etc
   for (int i = 1; i < x->num_outlets; i++) {
     int layer_idx = x->num_layers - (i - 1) - 1;
-    post("layer_index: %d, outlet_index %d", layer_idx, i);
     if (layer_idx < 0) break; // just in case
 
     t_layer *layer = &x->layers[layer_idx];
@@ -596,6 +620,7 @@ static void *nnseq_new(t_symbol *s, int argc, t_atom *argv)
 
   x->alpha = 0.01; // default
   x->leak = 0.01; // default
+  x->lambda = 0.01; // default
 
   // dynamic outlets (first attempt)
   x->num_outlets = x->num_layers > 8 ? 8 : x->num_layers + 1;
@@ -644,6 +669,8 @@ void nnseq_setup(void)
                   gensym("set_alpha"), A_DEFFLOAT, 0);
   class_addmethod(nnseq_class, (t_method)set_leak,
                   gensym("set_leak"), A_DEFFLOAT, 0);
+  class_addmethod(nnseq_class, (t_method)set_lambda,
+                  gensym("set_lambda"), A_DEFFLOAT, 0);
   class_addmethod(nnseq_class, (t_method)get_cost,
                   gensym("cost"), 0);
 }
