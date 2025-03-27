@@ -33,6 +33,7 @@ typedef struct _nnseq {
   int *layer_dims;
   int batch_size;
   t_float alpha;
+  t_float leak;
 
   t_layer *layers;
 

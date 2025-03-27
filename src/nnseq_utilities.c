@@ -53,8 +53,12 @@ void set_layer_activation(t_nnseq *x, t_symbol *s, int argc, t_atom *argv)
 
 void model_info(t_nnseq *x)
 {
+  post("");
+  post("********************************");
   post("Model has %d layers", x->num_layers);
   post("Batch size: %d", x->batch_size);
+  post("Alpha: %f", x->alpha);
+  post("Leak: %f", x->leak);
 
   for (int i = 0; i < x->num_layers; i++) {
     t_layer *layer = &x->layers[i];
@@ -116,7 +120,7 @@ t_float apply_activation(t_nnseq *x, t_int l, t_float z)
     case ACTIVATION_TANH:
       return tanh(z);
     case ACTIVATION_RELU:
-      return z > 0 ? z : 0;
+      return z > 0 ? z : z * x->leak;
     case ACTIVATION_LINEAR:
     default:
       return z;

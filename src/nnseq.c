@@ -314,7 +314,10 @@ static void model_forward(t_nnseq *x)
 }
 
 // NOTE: these should be in the utilities file (and not be static)
-static t_float activation_derivative(t_activation_type activation, t_float z, t_float a)
+static t_float activation_derivative(t_activation_type activation,
+                                     t_float z,
+                                     t_float a,
+                                     t_float leak)
 {
   switch(activation) {
     case ACTIVATION_SIGMOID:
@@ -322,7 +325,7 @@ static t_float activation_derivative(t_activation_type activation, t_float z, t_
     case ACTIVATION_TANH:
       return 1.0 - a * a;
     case ACTIVATION_RELU:
-      return z > 0 ? 1.0 : 0.0; // note: update for leaky relu
+      return z > 0 ? 1.0 : leak; // note: update for leaky relu
     case ACTIVATION_LINEAR:
     default:
       return 1.0;
@@ -363,37 +366,19 @@ static void calculate_dz(t_nnseq *x, t_layer *layer)
       layer->dz[idx] = layer->da[idx] *
        activation_derivative(layer->activation,
                              layer->z_cache[idx],
-                             layer->a_cache[idx]);
+                             layer->a_cache[idx],
+                             x->leak);
     }
   }
 }
-
-/*
-dW = 1/m dZ.Aprev.T 
-*/
-static void calculate_dw_bak(t_nnseq *x, int l, t_layer *current_layer)
+static void set_alpha(t_nnseq *x, t_floatarg f)
 {
-  int batch_size = x->batch_size;
-  int n = current_layer->n;
-  int n_prev = current_layer->n_prev;
-  t_float *a_prev = NULL;
-  if (l > 0) {
-    a_prev = x->layers[l-1].a_cache;
-  } else {
-    a_prev = x->x_input;
-  }
+  x->alpha = f;
+}
 
-  // dZ (n, batch_size) Aprev(n_prev, batch_size)
-  for (int i = 0; i < n; i++) {
-    for (int j = 0; j < batch_size; j++) {
-      t_float dw = 0;
-      for (int k = 0; k < n_prev; k++) {
-        dw += current_layer->dz[i * batch_size + k] * a_prev[j * batch_size + k];
-      }
-      dw /= batch_size;
-      current_layer->dw[i * batch_size + j] = dw;
-    }
-  }
+static void set_leak(t_nnseq *x, t_floatarg f)
+{
+  x->leak = f;
 }
 
 static void calculate_dw(t_nnseq *x, int l, t_layer *layer)
@@ -582,7 +567,8 @@ static void *nnseq_new(t_symbol *s, int argc, t_atom *argv)
     return NULL;
   }
 
-  x->alpha = 0.01; // just hardcode it for now
+  x->alpha = 0.01; // default
+  x->leak = 0.01; // default
 
   x->output_outlet = outlet_new(&x->x_obj, &s_list);
 
@@ -613,7 +599,10 @@ void nnseq_setup(void)
                   gensym("get_x"), 0);
   class_addmethod(nnseq_class, (t_method)get_y_labels,
                   gensym("get_y"), 0);
-
+  class_addmethod(nnseq_class, (t_method)set_alpha,
+                  gensym("set_alpha"), A_DEFFLOAT, 0);
+  class_addmethod(nnseq_class, (t_method)set_leak,
+                  gensym("set_leak"), A_DEFFLOAT, 0);
   class_addmethod(nnseq_class, (t_method)get_cost,
                   gensym("cost"), 0);
 }
