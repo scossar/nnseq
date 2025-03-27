@@ -66,6 +66,68 @@ static void nnseq_free(t_nnseq *x)
   }
 }
 
+static void set_layer_weights(t_nnseq *x, t_symbol *s, int argc, const t_atom *argv)
+{
+  if (argc < 2) {
+    pd_error(x, "nnseq: set_weights requires a minimum of 2 arguments");
+    return;
+  }
+
+  int l = atom_getfloat(&argv[0]);
+
+  if (l >= x->num_layers) {
+    pd_error(x, "nnseq: layer %d does not exist. model has %d layers",
+             l, x->num_layers);
+    return;
+  }
+
+  t_layer *layer = &x->layers[l];
+  int n = layer->n;
+  int n_prev = layer->n_prev;
+  int w_size = n * n_prev;
+
+  if (argc - 1 != w_size) {
+    pd_error(x, "nnseq: set_weights for layer %d requires %d weights",
+             l, w_size);
+    return;
+  }
+
+  for (int i = 1; i < argc; i++) {
+    t_float value = atom_getfloat(&argv[i]);
+    layer->weights[i - 1] = value; // this is awkward
+  }
+}
+
+static void set_layer_biases(t_nnseq *x, t_symbol *s, int argc, const t_atom *argv)
+{
+  if (argc < 2) {
+    pd_error(x, "nnseq: set_biases requires a minimum of 2 arguments");
+    return;
+  }
+
+  int l = atom_getfloat(&argv[0]);
+
+  if (l >= x->num_layers) {
+    pd_error(x, "nnseq: layer %d does not exist. model has %d layers",
+             l, x->num_layers);
+    return;
+  }
+
+  t_layer *layer = &x->layers[l];
+  int n = layer->n;
+
+  if (argc - 1 != n) {
+    pd_error(x, "nnseq: set_biases for layer %d requires %d biases",
+             l, n);
+    return;
+  }
+
+  for (int i = 1; i < argc; i++) {
+    t_float value = atom_getfloat(&argv[i]);
+    layer->biases[i - 1] = value;
+  }
+}
+
 // const t_atom *argv makes it explicit that argv can't be modified
 static void set_x_input(t_nnseq *x, t_symbol *s, int argc, const t_atom *argv)
 {
@@ -334,16 +396,6 @@ static t_float activation_derivative(t_activation_type activation,
   }
 }
 
-static void da_outer(t_nnseq *x)
-{
-  t_layer *output_layer = &x->layers[x->num_layers - 1];
-  int num_outputs = output_layer->n;
-  int output_size = num_outputs * x->batch_size;
-  for (int i = 0; i < output_size; i++) {
-    output_layer->da[i]  = output_layer->a_cache[i] - x->y_labels[i];
-  }
-}
-
 static void calculate_output_layer_da(t_nnseq *x)
 {
   t_layer *output_layer = &x->layers[x->num_layers - 1];
@@ -577,6 +629,14 @@ static void nnseq_bang(t_nnseq *x)
   x->iterator++;
 }
 
+static void run_verbose(t_nnseq *x)
+{
+  post("running forward/back/update methods");
+  model_forward(x);
+  model_backward(x);
+  update_parameters(x);
+}
+
 static void *nnseq_new(t_symbol *s, int argc, t_atom *argv)
 {
   t_nnseq *x = (t_nnseq *)pd_new(nnseq_class);
@@ -673,4 +733,12 @@ void nnseq_setup(void)
                   gensym("set_lambda"), A_DEFFLOAT, 0);
   class_addmethod(nnseq_class, (t_method)get_cost,
                   gensym("cost"), 0);
+
+  // tests
+  class_addmethod(nnseq_class, (t_method)set_layer_weights,
+                  gensym("set_weights"), A_GIMME, 0);
+  class_addmethod(nnseq_class, (t_method)set_layer_biases,
+                  gensym("set_biases"), A_GIMME, 0);
+  class_addmethod(nnseq_class, (t_method)run_verbose,
+                  gensym("verbose"), 0);
 }
