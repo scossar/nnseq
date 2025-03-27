@@ -64,15 +64,16 @@ void model_info(t_nnseq *x)
     post("inputs per neuron: %d", layer->n_prev);
     post("activation: %s", activation_to_symbol(layer)->s_name);
 
-    if (layer->a_cache) {
-      post("Layer activations:");
-      int activations_size = layer->n * x->batch_size;
-      for (int j = 0; j < activations_size; j++) {
-        post("a_cache[%d]: %f", j, layer->a_cache[j]);
-      }
-    } else {
-      post("activations cache not allocated");
-    }
+    // commenting this out because it makes the output unreadable
+    /*if (layer->a_cache) {*/
+    /*  post("Layer activations:");*/
+    /*  int activations_size = layer->n * x->batch_size;*/
+    /*  for (int j = 0; j < activations_size; j++) {*/
+    /*    post("a_cache[%d]: %f", j, layer->a_cache[j]);*/
+    /*  }*/
+    /*} else {*/
+    /*  post("activations cache not allocated");*/
+    /*}*/
 
     if (layer->weights) {
       post("Sample weights (first 3 or fewer):");

@@ -256,6 +256,9 @@ static int init_layers(t_nnseq *x)
       return 0;
     }
 
+    // TODO: remove
+    post("initializing layer %d, n: %d, n_prev: %d", l, layer->n, layer->n_prev);
+
     init_layer_weights(x, l);
     init_layer_biases(x, l);
   }
@@ -270,7 +273,7 @@ static void layer_forward(t_nnseq *x, t_int l, t_float *input)
   int n_neurons = layer->n;
   int n_inputs = layer->n_prev;
 
-  // (Claude) process one sample at a time to improve cache locality
+  // process one sample at a time to improve cache locality
   // essentially, the batch_size iteration has been moved to the outer loop.
   for (int j = 0; j < batch_size; j++) {
     for (int i = 0; i < n_neurons; i++) {
@@ -286,12 +289,6 @@ static void layer_forward(t_nnseq *x, t_int l, t_float *input)
   }
 }
 
-static void dz_outer(t_nnseq *x)
-{
-  /*t_layer *outer_layer = &x->layers[x->num_layers - 1];*/
-  post("outer layer info");
-  /*post("n: %d, n_prev: %d", outer_layer->n, outer_layer->n_prev);*/
-}
 
 static void model_forward(t_nnseq *x)
 {
@@ -310,15 +307,213 @@ static void model_forward(t_nnseq *x)
   }
 
   for (int l = 0; l < x->num_layers; l++) {
-    t_layer *layer = &x->layers[l];
     t_float *input = l == 0 ? x->x_input : x->layers[l-1].a_cache;
     layer_forward(x, l, input);
+  }
+}
+
+// NOTE: these should be in the utilities file (and not be static)
+static t_float activation_derivative(t_activation_type activation, t_float z, t_float a)
+{
+  switch(activation) {
+    case ACTIVATION_SIGMOID:
+      return a * (1.0 - a);
+    case ACTIVATION_TANH:
+      return 1.0 - a * a;
+    case ACTIVATION_RELU:
+      return z > 0 ? 1.0 : 0.0; // note: update for leaky relu
+    case ACTIVATION_LINEAR:
+    default:
+      return 1.0;
+  }
+}
+
+static void da_outer(t_nnseq *x)
+{
+  t_layer *output_layer = &x->layers[x->num_layers - 1];
+  int num_outputs = output_layer->n;
+  int output_size = num_outputs * x->batch_size;
+  for (int i = 0; i < output_size; i++) {
+    output_layer->da[i]  = output_layer->a_cache[i] - x->y_labels[i];
+  }
+}
+
+static void calculate_output_layer_da(t_nnseq *x)
+{
+  t_layer *output_layer = &x->layers[x->num_layers - 1];
+  int num_outputs = output_layer->n;
+
+  for (int i = 0; i < num_outputs; i++) {
+    for (int j = 0; j < x->batch_size; j++) {
+      int idx = i * x->batch_size + j;
+      // For MSE loss: dL/dA = 2*(A-Y)/m, simplified to (A - Y)
+      output_layer->da[idx] = output_layer->a_cache[idx] - x->y_labels[idx];
+    }
+  }
+}
+
+static void calculate_dz(t_nnseq *x, t_layer *layer)
+{
+  int n_neurons = layer->n;
+
+  for (int i = 0; i < n_neurons; i++) {
+    for (int j = 0; j < x->batch_size; j++) {
+      int idx = i * x->batch_size + j;
+      layer->dz[idx] = layer->da[idx] *
+       activation_derivative(layer->activation,
+                             layer->z_cache[idx],
+                             layer->a_cache[idx]);
+    }
+  }
+}
+
+/*
+dW = 1/m dZ.Aprev.T 
+*/
+static void calculate_dw_bak(t_nnseq *x, int l, t_layer *current_layer)
+{
+  int batch_size = x->batch_size;
+  int n = current_layer->n;
+  int n_prev = current_layer->n_prev;
+  t_float *a_prev = NULL;
+  if (l > 0) {
+    a_prev = x->layers[l-1].a_cache;
+  } else {
+    a_prev = x->x_input;
+  }
+
+  // dZ (n, batch_size) Aprev(n_prev, batch_size)
+  for (int i = 0; i < n; i++) {
+    for (int j = 0; j < batch_size; j++) {
+      t_float dw = 0;
+      for (int k = 0; k < n_prev; k++) {
+        dw += current_layer->dz[i * batch_size + k] * a_prev[j * batch_size + k];
+      }
+      dw /= batch_size;
+      current_layer->dw[i * batch_size + j] = dw;
+    }
+  }
+}
+
+static void calculate_dw(t_nnseq *x, int l, t_layer *layer)
+{
+  int n_neurons = layer->n;
+  int n_inputs = layer->n_prev;
+  int batch_size = x->batch_size;
+  t_float *prev_activations = (l == 0) ? x->x_input : x->layers[l-1].a_cache;
+  
+  // Initialize dw to zero
+  /*for (int i = 0; i < n_neurons * n_inputs; i++) {*/
+  /*  layer->dw[i] = 0.0;*/
+  /*}*/
+  // try this approach
+  memset(layer->dw, 0, sizeof(t_float) * n_neurons * n_inputs);
+  
+  // Calculate gradients: dW = dZ × A_prev.T
+  for (int i = 0; i < n_neurons; i++) {
+    for (int j = 0; j < n_inputs; j++) {
+      for (int k = 0; k < batch_size; k++) {
+        // dZ[i,k] × A_prev[j,k]
+        layer->dw[i*n_inputs+j] += layer->dz[i*batch_size+k] * 
+                                  prev_activations[j*batch_size+k];
+      }
+      // Average over batch size
+      layer->dw[i*n_inputs+j] /= batch_size;
+    }
+  }
+}
+
+/*
+db 1/m sum(dZ)
+*/
+static void calculate_db(t_nnseq *x, t_layer *layer)
+{
+  int n_neurons = layer->n;
+
+  // initialize db to zero
+  memset(layer->db, 0, sizeof(t_float) * n_neurons);
+
+  for (int i = 0; i < n_neurons; i++) {
+    for (int j = 0; j < x->batch_size; j++) {
+      layer->db[i] += layer->dz[i*x->batch_size+j];
+    }
+    layer->db[i] /= x->batch_size;
+  }
+}
+
+// W.T dZ
+// W (n, n_prev); dZ (n, batch_size)
+static void calculate_da_prev(t_nnseq *x, int l, t_layer *layer)
+{
+  int n_neurons = layer->n;
+  int n_prev = layer->n_prev;
+  t_layer *prev_layer = &x->layers[l-1];
+  
+  // initialize da_prev to zero
+  /*for (int i = 0; i < n_prev * x->batch_size; i++) {*/
+  /*  prev_layer->da[i] = 0.0;*/
+  /*}*/
+  memset(layer->da, 0, sizeof(t_float) * n_neurons * x->batch_size);
+  
+  // da_prev = W^T * dz
+  for (int k = 0; k < n_prev; k++) {
+    for (int j = 0; j < x->batch_size; j++) {
+      for (int i = 0; i < n_neurons; i++) {
+        prev_layer->da[k*x->batch_size+j] += layer->weights[i*n_prev+k] * 
+                                            layer->dz[i*x->batch_size+j];
+      }
+    }
+  }
+}
+
+static void update_parameters(t_nnseq *x)
+{
+  for (int l = 0; l < x->num_layers; l++) {
+    t_layer *layer = &x->layers[l];
+    int n_neurons = layer->n;
+    int n_inputs = layer->n_prev;
+
+    for (int i = 0; i < n_neurons * n_inputs; i++) {
+      layer->weights[i] -= x->alpha * layer->dw[i];
+    }
+
+    for (int i = 0; i < n_neurons; i++) {
+      layer->biases[i] -= x->alpha * layer->db[i];
+    }
+  }
+}
+
+static void layer_backward(t_nnseq *x, int l)
+{
+  t_layer *current_layer = &x->layers[l];
+
+  // for output layer, calculate da from loss function
+  if (l == x->num_layers - 1) {
+    calculate_output_layer_da(x);
+  }
+
+  calculate_dz(x, current_layer);
+  calculate_dw(x, l, current_layer);
+  calculate_db(x, current_layer);
+
+  // calculate da_prev, except for input layer
+  if (l > 0) {
+    calculate_da_prev(x, l, current_layer);
+  }
+}
+
+static void model_backward(t_nnseq *x)
+{
+  for (int l = x->num_layers - 1; l >= 0; l--) {
+    layer_backward(x, l);
   }
 }
 
 static void nnseq_bang(t_nnseq *x)
 {
   model_forward(x);
+  model_backward(x);
+  update_parameters(x);
 }
 
 static void *nnseq_new(t_symbol *s, int argc, t_atom *argv)
@@ -362,6 +557,8 @@ static void *nnseq_new(t_symbol *s, int argc, t_atom *argv)
     return NULL;
   }
 
+  x->alpha = 0.01; // just hardcode it for now
+
   x->output_outlet = outlet_new(&x->x_obj, &s_list);
 
   return (void *)x;
@@ -394,6 +591,6 @@ void nnseq_setup(void)
                   gensym("get_y"), 0);
 
   // tmp
-  class_addmethod(nnseq_class, (t_method)dz_outer,
+  class_addmethod(nnseq_class, (t_method)da_outer,
                   gensym("dz_outer"), 0);
 }

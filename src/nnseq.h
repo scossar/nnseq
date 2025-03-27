@@ -1,6 +1,7 @@
 #include "m_pd.h"
 #include <time.h>
 #include <stdlib.h>
+#include <string.h>
 #include <math.h>
 
 typedef enum {
@@ -31,6 +32,7 @@ typedef struct _nnseq {
   int num_layers;
   int *layer_dims;
   int batch_size;
+  t_float alpha;
 
   t_layer *layers;
 
