@@ -582,7 +582,9 @@ static void calculate_da_prev(t_nnseq *x, int l, t_layer *layer)
   t_layer *prev_layer = &x->layers[l-1];
 
   // initialize previous layer da to 0
-  memset(prev_layer->da, 0, sizeof(t_float) * n_neurons * x->batch_size);
+  // a bug?
+  // memset(prev_layer->da, 0, sizeof(t_float) * n_neurons * x->batch_size);
+  memset(prev_layer->da, 0, sizeof(t_float) * n_prev * x->batch_size);
 
   // da_prev = W^T * dz
   for (int k = 0; k < n_prev; k++) {
@@ -737,6 +739,7 @@ static void nnseq_bang(t_nnseq *x)
     case OPTIMIZATION_GD:
     default:
       update_parameters(x);
+      break;
   }
 
   if (x->output_config.num_layers_to_output <= 0) {
