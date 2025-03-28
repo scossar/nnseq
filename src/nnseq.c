@@ -258,6 +258,21 @@ static void get_y_labels(t_nnseq *x)
   freebytes(out_atoms, y_label_size * sizeof(t_atom));
 }
 
+static void set_alpha(t_nnseq *x, t_floatarg f)
+{
+  x->alpha = f;
+}
+
+static void set_leak(t_nnseq *x, t_floatarg f)
+{
+  x->leak = f;
+}
+
+static void set_lambda(t_nnseq *x, t_floatarg f)
+{
+  x->lambda = f;
+}
+
 static int init_layers(t_nnseq *x)
 {
   x->layers = (t_layer *)getbytes(sizeof(t_layer) * x->num_layers);
@@ -321,9 +336,6 @@ static int init_layers(t_nnseq *x)
       return 0;
     }
 
-    // TODO: remove
-    post("initializing layer %d, n: %d, n_prev: %d", l, layer->n, layer->n_prev);
-
     init_layer_weights(x, l);
     init_layer_biases(x, l);
   }
@@ -353,7 +365,6 @@ static void layer_forward(t_nnseq *x, t_int l, t_float *input)
     }
   }
 }
-
 
 static void model_forward(t_nnseq *x)
 {
@@ -396,19 +407,6 @@ static t_float activation_derivative(t_activation_type activation,
   }
 }
 
-static void calculate_output_layer_da(t_nnseq *x)
-{
-  t_layer *output_layer = &x->layers[x->num_layers - 1];
-  int num_outputs = output_layer->n;
-
-  for (int i = 0; i < num_outputs; i++) {
-    for (int j = 0; j < x->batch_size; j++) {
-      int idx = i * x->batch_size + j;
-      // For MSE loss: dL/dA = 2*(A-Y)/m, simplified to (A - Y)
-      output_layer->da[idx] = output_layer->a_cache[idx] - x->y_labels[idx];
-    }
-  }
-}
 
 static void calculate_dz(t_nnseq *x, t_layer *layer)
 {
@@ -425,20 +423,6 @@ static void calculate_dz(t_nnseq *x, t_layer *layer)
     }
   }
 }
-static void set_alpha(t_nnseq *x, t_floatarg f)
-{
-  x->alpha = f;
-}
-
-static void set_leak(t_nnseq *x, t_floatarg f)
-{
-  x->leak = f;
-}
-
-static void set_lambda(t_nnseq *x, t_floatarg f)
-{
-  x->lambda = f;
-}
 
 static void calculate_dw(t_nnseq *x, int l, t_layer *layer)
 {
@@ -446,14 +430,10 @@ static void calculate_dw(t_nnseq *x, int l, t_layer *layer)
   int n_inputs = layer->n_prev;
   int batch_size = x->batch_size;
   t_float *prev_activations = (l == 0) ? x->x_input : x->layers[l-1].a_cache;
-  
+
   // Initialize dw to zero
-  /*for (int i = 0; i < n_neurons * n_inputs; i++) {*/
-  /*  layer->dw[i] = 0.0;*/
-  /*}*/
-  // try this approach
   memset(layer->dw, 0, sizeof(t_float) * n_neurons * n_inputs);
-  
+
   // Calculate gradients: dW = dZ × A_prev.T
   for (int i = 0; i < n_neurons; i++) {
     for (int j = 0; j < n_inputs; j++) {
@@ -486,6 +466,20 @@ static void calculate_db(t_nnseq *x, t_layer *layer)
   }
 }
 
+static void calculate_output_layer_da(t_nnseq *x)
+{
+  t_layer *output_layer = &x->layers[x->num_layers - 1];
+  int num_outputs = output_layer->n;
+
+  for (int i = 0; i < num_outputs; i++) {
+    for (int j = 0; j < x->batch_size; j++) {
+      int idx = i * x->batch_size + j;
+      // For MSE loss: dL/dA = 2*(A-Y)/m, simplified to (A - Y)
+      output_layer->da[idx] = output_layer->a_cache[idx] - x->y_labels[idx];
+    }
+  }
+}
+
 // W.T dZ
 // W (n, n_prev); dZ (n, batch_size)
 static void calculate_da_prev(t_nnseq *x, int l, t_layer *layer)
@@ -493,13 +487,10 @@ static void calculate_da_prev(t_nnseq *x, int l, t_layer *layer)
   int n_neurons = layer->n;
   int n_prev = layer->n_prev;
   t_layer *prev_layer = &x->layers[l-1];
-  
-  // initialize da_prev to zero
-  /*for (int i = 0; i < n_prev * x->batch_size; i++) {*/
-  /*  prev_layer->da[i] = 0.0;*/
-  /*}*/
-  memset(layer->da, 0, sizeof(t_float) * n_neurons * x->batch_size);
-  
+
+  // initialize previous layer da to 0
+  memset(prev_layer->da, 0, sizeof(t_float) * n_neurons * x->batch_size);
+
   // da_prev = W^T * dz
   for (int k = 0; k < n_prev; k++) {
     for (int j = 0; j < x->batch_size; j++) {
@@ -543,7 +534,6 @@ static void update_parameters_with_l2(t_nnseq *x)
       layer->biases[i] -= x->alpha * layer->db[i];
     }
   }
-
 }
 
 static void layer_backward(t_nnseq *x, int l)
@@ -631,10 +621,127 @@ static void nnseq_bang(t_nnseq *x)
 
 static void run_verbose(t_nnseq *x)
 {
+  post("***********************************");
   post("running forward/back/update methods");
   model_forward(x);
+  post("");
+
+  post("forward pass complete");
+  for (int i = 0; i < x->num_layers; i++) {
+    t_layer *layer = &x->layers[i];
+    post("layer: %d", i);
+    post("neurons: %d", layer->n);
+    post("inputs per neuron: %d", layer->n_prev);
+    post("activation: %s", activation_to_symbol(layer)->s_name);
+
+    int activations_size = x->batch_size * layer->n;
+    post("");
+    post("layer linear predictions");
+    for (int j = 0; j < activations_size; j++) {
+      post("z_cache[%d]: %f", j, layer->z_cache[j]);
+    }
+    post("layer activations");
+    for (int j = 0; j < activations_size; j++) {
+      post("a_cache[%d]: %f", j, layer->a_cache[j]);
+    }
+
+    post("");
+    post("layer weights");
+    int weights_size = layer->n * layer->n_prev;
+    for (int j = 0; j < weights_size; j++) {
+      post("weights[%d]: %f", j, layer->weights[j]);
+    }
+    post("layer biases");
+    for (int j = 0; j < layer->n; j++) {
+      post("biases[%d]: %f", j, layer->biases[j]);
+    }
+    post("***************************************");
+    post("");
+  }
+
   model_backward(x);
+  post("backward pass complete");
+  for (int i = 0; i < x->num_layers; i++) {
+    t_layer *layer = &x->layers[i];
+    post("layer: %d", i);
+    post("neurons: %d", layer->n);
+    post("inputs per neuron: %d", layer->n_prev);
+    post("activation: %s", activation_to_symbol(layer)->s_name);
+    post("");
+    post("layer weights");
+    int weights_size = layer->n * layer->n_prev;
+    for (int j = 0; j < weights_size; j++) {
+      post("weights[%d]: %f", j, layer->weights[j]);
+    }
+    post("layer biases");
+    for (int j = 0; j < layer->n; j++) {
+      post("biases[%d]: %f", j, layer->biases[j]);
+    }
+    post("***************************************");
+    post("");
+  }
   update_parameters(x);
+  post("update params complete");
+  for (int i = x->num_layers - 1; i >= 0; i--) {
+    t_layer *layer = &x->layers[i];
+    post("layer: %d", i);
+    post("neurons: %d", layer->n);
+    post("inputs per neuron: %d", layer->n_prev);
+    post("activation: %s", activation_to_symbol(layer)->s_name);
+    post("");
+
+    int activations_size = layer->n * x->batch_size;
+    post("layer da");
+    for (int j = 0; j < activations_size; j++) {
+      post("da[%d]: %f", j, layer->da[j]);
+    }
+    post("layer dz");
+    for (int j = 0; j < activations_size; j++) {
+      post("dz[%d]: %f", j, layer->dz[j]);
+    }
+    post("layer db");
+    for (int j = 0; j < layer->n; j++) {
+      post("db[%d]: %f", j, layer->db[j]);
+    }
+    int weights_size = layer->n * layer->n_prev;
+    post("layer dw");
+    for (int j = 0; j < weights_size; j++) {
+      post("dw[%d]: %f", j, layer->dw[j]);
+    } 
+    post("layer weights");
+    for (int j = 0; j < weights_size; j++) {
+      post("weights[%d]: %f", j, layer->weights[j]);
+    }
+    post("layer biases");
+    for (int j = 0; j < layer->n; j++) {
+      post("biases[%d]: %f", j, layer->biases[j]);
+    }
+    post("***************************************");
+    post("");
+  }
+}
+
+static void clear_layers(t_nnseq *x)
+{
+  //memset(layer->da, 0, sizeof(t_float) * n_neurons * x->batch_size);
+  int batch_size = x->batch_size;
+
+  for (int i = 0; i < x->num_layers; i++) {
+    t_layer *layer = &x->layers[i];
+
+    int n = layer->n;
+    int n_prev = layer->n_prev;
+    int output_size = n * batch_size;
+    int w_size = n * n_prev;
+    memset(layer->z_cache, 0, sizeof(t_float) * output_size);
+    memset(layer->dz, 0, sizeof(t_float) * output_size);
+    memset(layer->a_cache, 0, sizeof(t_float) * output_size);
+    memset(layer->da, 0, sizeof(t_float) * output_size);
+    memset(layer->weights, 0, sizeof(t_float) * w_size);
+    memset(layer->dw, 0, sizeof(t_float) * w_size);
+    memset(layer->biases, 0, sizeof(t_float) * n);
+    memset(layer->db, 0, sizeof(t_float) * n);
+  }
 }
 
 static void *nnseq_new(t_symbol *s, int argc, t_atom *argv)
@@ -734,11 +841,12 @@ void nnseq_setup(void)
   class_addmethod(nnseq_class, (t_method)get_cost,
                   gensym("cost"), 0);
 
-  // tests
   class_addmethod(nnseq_class, (t_method)set_layer_weights,
                   gensym("set_weights"), A_GIMME, 0);
   class_addmethod(nnseq_class, (t_method)set_layer_biases,
                   gensym("set_biases"), A_GIMME, 0);
   class_addmethod(nnseq_class, (t_method)run_verbose,
                   gensym("verbose"), 0);
+  class_addmethod(nnseq_class, (t_method)clear_layers,
+                  gensym("clear_layers"), 0);
 }
