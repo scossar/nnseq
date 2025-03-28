@@ -11,6 +11,14 @@ typedef enum {
   ACTIVATION_RELU
 } t_activation_type;
 
+typedef struct _output_config {
+  int *layer_indices; // array of layer indices to output
+  int num_layers_to_output;
+  int output_activations; // boolean: output activations?
+  int output_gradients; // boolean: output gradients? (I think it's going to
+  // need to be more specific)
+} t_output_config;
+
 typedef struct _layer {
   int n;
   int n_prev;
@@ -44,8 +52,10 @@ typedef struct _nnseq {
   t_float *y_labels;
 
   t_inlet *input_inlet;
-  t_outlet **layer_outlets; // array of outlets for layer activations
-  int num_outlets; // number of layer outlets
+  // t_outlet **layer_outlets; // array of outlets for layer activations
+  // int num_outlets; // number of layer outlets
+  t_outlet *output_outlet;
+  t_output_config output_config;
 } t_nnseq;
 
 t_symbol* activation_to_symbol(t_layer *l);

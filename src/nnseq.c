@@ -5,16 +5,20 @@ static t_class *nnseq_class = NULL;
 
 // NOTE: multi-channel-output implementation discussed at
 // flattened_matrix_multiplication_with_transforms.md (line ~1196)
+// For memory management best practices, see
+// pd_neural_network_sequencer_output.md (line ~487)
 
 static void nnseq_free(t_nnseq *x)
 {
   if (x->x_input != NULL) {
     freebytes(x->x_input, x->layer_dims[0] * x->batch_size * sizeof(t_float));
+    x->x_input = NULL;
   }
 
   if (x->y_labels != NULL) {
     freebytes(x->y_labels, x->layer_dims[x->num_layers] * x->batch_size *
               sizeof(t_float));
+    x->y_labels = NULL;
   }
 
   if (x->layers != NULL) {
@@ -24,45 +28,66 @@ static void nnseq_free(t_nnseq *x)
       if (x->layers[i].weights != NULL) {
         freebytes(x->layers[i].weights, x->layers[i].n * x->layers[i].n_prev *
                 sizeof(t_float));
+        x->layers[i].weights = NULL;
       }
       if (x->layers[i].dw != NULL) {
         freebytes(x->layers[i].dw, x->layers[i].n * x->layers[i].n_prev *
                 sizeof(t_float));
+        x->layers[i].dw = NULL;
       }
 
       // biases and db
       if (x->layers[i].biases != NULL) {
         freebytes(x->layers[i].biases, x->layers[i].n * sizeof(t_float));
+        x->layers[i].biases = NULL;
       }
       if (x->layers[i].db != NULL) {
         freebytes(x->layers[i].db, x->layers[i].n * sizeof(t_float));
+        x->layers[i].db = NULL;
       }
 
       // z and dz
       if (x->layers[i].z_cache != NULL) {
         freebytes(x->layers[i].z_cache, x->layers[i].n * x->batch_size * sizeof(t_float));
+        x->layers[i].z_cache = NULL;
       }
       if (x->layers[i].dz != NULL) {
         freebytes(x->layers[i].dz, x->layers[i].n * x->batch_size * sizeof(t_float));
+        x->layers[i].dz = NULL;
       }
 
       // a and da
       if (x->layers[i].a_cache != NULL) {
         freebytes(x->layers[i].a_cache, x->layers[i].n * x->batch_size * sizeof(t_float));
+        x->layers[i].a_cache = NULL;
       }
       if (x->layers[i].da != NULL) {
         freebytes(x->layers[i].da, x->layers[i].n * x->batch_size * sizeof(t_float));
+        x->layers[i].da = NULL;
       }
     }
     freebytes(x->layers, x->num_layers * sizeof(t_layer));
+    x->layers = NULL;
+  }
+
+  if (x->output_config.layer_indices != NULL) {
+    freebytes(x->output_config.layer_indices,
+              x->output_config.num_layers_to_output * sizeof(int));
+    x->output_config.layer_indices = NULL;
   }
 
   if (x->layer_dims != NULL) {
     freebytes(x->layer_dims, (x->num_layers + 1) * sizeof(int));
+    x->layer_dims = NULL;
   }
 
-  if (x->layer_outlets != NULL) {
-    freebytes(x->layer_outlets, x->num_outlets * sizeof(t_outlet *));
+  if (x->output_outlet != NULL) {
+    outlet_free(x->output_outlet);
+    x->output_outlet = NULL;
+  }
+  if (x->input_inlet != NULL) {
+    inlet_free(x->input_inlet);
+    x->input_inlet = NULL;
   }
 }
 
@@ -146,6 +171,7 @@ static void set_x_input(t_nnseq *x, t_symbol *s, int argc, const t_atom *argv)
   // the new values have been validated.
   if (x->x_input != NULL) {
     freebytes(x->x_input, expected_size * sizeof(t_float));
+    x->x_input = NULL;
   }
 
   // allocate memory
@@ -193,6 +219,7 @@ static void set_y_labels(t_nnseq *x, t_symbol *s, int argc, const t_atom *argv)
   // free any existing allocation
   if (x->y_labels != NULL) {
     freebytes(x->y_labels, expected_size * sizeof(t_float));
+    x->y_labels = NULL;
   }
 
   x->y_labels = (t_float *)getbytes(expected_size * sizeof(t_float));
@@ -204,8 +231,8 @@ static void set_y_labels(t_nnseq *x, t_symbol *s, int argc, const t_atom *argv)
   for (int i = 0; i < expected_size; i++) {
     if (argv[i].a_type != A_FLOAT) {
       pd_error(x, "nnseq: non-numerical Y value at index %d", i);
-      freebytes(x->x_input, expected_size * sizeof(t_float));
-      x->x_input = NULL;
+      freebytes(x->y_labels, expected_size * sizeof(t_float));
+      x->y_labels = NULL;
       return;
     }
     t_float value = atom_getfloat(&argv[i]);
@@ -235,8 +262,9 @@ static void get_x_input(t_nnseq *x)
     SETFLOAT(&out_atoms[i], x->x_input[i]);
   }
   
-  outlet_list(x->layer_outlets[0], gensym("list"), x_size, out_atoms);
+  outlet_list(x->output_outlet, gensym("list"), x_size, out_atoms);
   freebytes(out_atoms, x_size * sizeof(t_atom));
+  out_atoms = NULL; // not strictly necessary
 }
 
 
@@ -254,8 +282,9 @@ static void get_y_labels(t_nnseq *x)
     SETFLOAT(&out_atoms[i], x->y_labels[i]);
   }
 
-  outlet_list(x->layer_outlets[0], gensym("list"), y_label_size, out_atoms);
+  outlet_list(x->output_outlet, gensym("list"), y_label_size, out_atoms);
   freebytes(out_atoms, y_label_size * sizeof(t_atom));
+  out_atoms = NULL; // not strictly necessary
 }
 
 static void set_alpha(t_nnseq *x, t_floatarg f)
@@ -584,7 +613,7 @@ static t_float compute_cost(t_nnseq *x)
 static void get_cost(t_nnseq *x)
 {
   t_float cost = compute_cost(x);
-  outlet_float(x->layer_outlets[0], cost);
+  outlet_float(x->output_outlet, cost);
 }
 
 static void nnseq_bang(t_nnseq *x)
@@ -723,7 +752,6 @@ static void run_verbose(t_nnseq *x)
 
 static void clear_layers(t_nnseq *x)
 {
-  //memset(layer->da, 0, sizeof(t_float) * n_neurons * x->batch_size);
   int batch_size = x->batch_size;
 
   for (int i = 0; i < x->num_layers; i++) {
@@ -744,6 +772,43 @@ static void clear_layers(t_nnseq *x)
   }
 }
 
+static void output_layers(t_nnseq *x, t_symbol *s, int argc, const t_atom *argv)
+{
+  // free previous config
+  if (x->output_config.layer_indices != NULL) {
+    freebytes(x->output_config.layer_indices,
+              x->output_config.num_layers_to_output * sizeof(int));
+  }
+
+  for (int i = 0; i < argc; i++) {
+    int layer_idx = (int)atom_getfloat(&argv[i]);
+
+    if (layer_idx < 0 || layer_idx >= x->num_layers) {
+      pd_error(x, "nnseq: invalid layer index %d", layer_idx);
+      layer_idx = 0; // default to 0, or don't?
+    }
+
+    x->output_config.layer_indices[i] = layer_idx;
+  }
+}
+
+static void output_types(t_nnseq *x, t_symbol *s, int argc, const t_atom *argv)
+{
+  // defaults are already set in constructor
+  // I'm not sure about this approach. Keeping it for now as an example
+  for (int i = 0; i < argc; i++) {
+    t_symbol *type = atom_getsymbol(&argv[i]);
+
+    if (type == gensym("activations")) {
+      x->output_config.output_activations = 1;
+    }
+
+    else if (type == gensym("gradients")) {
+      x->output_config.output_gradients = 1;
+    }
+  }
+}
+
 static void *nnseq_new(t_symbol *s, int argc, t_atom *argv)
 {
   t_nnseq *x = (t_nnseq *)pd_new(nnseq_class);
@@ -759,6 +824,11 @@ static void *nnseq_new(t_symbol *s, int argc, t_atom *argv)
   x->layer_dims = NULL;
   x->x_input = NULL;
   x->y_labels = NULL;
+
+  x->output_config.layer_indices = NULL;
+  x->output_config.num_layers_to_output = 0;
+  x->output_config.output_activations = 1; // default to outputting activations
+  x->output_config.output_gradients = 0; // probably going to change this anyway
 
   // first arg is batch_size
   x->batch_size = atom_getfloat(argv++);
@@ -789,19 +859,8 @@ static void *nnseq_new(t_symbol *s, int argc, t_atom *argv)
   x->leak = 0.01; // default
   x->lambda = 0.01; // default
 
-  // dynamic outlets (first attempt)
-  x->num_outlets = x->num_layers > 8 ? 8 : x->num_layers + 1;
 
-  // an array of outlets
-  x->layer_outlets = (t_outlet **)getbytes(x->num_outlets * sizeof(t_outlet *));
-
-  // create outlet for any type of message (leftmost outlet)
-  x->layer_outlets[0] = outlet_new(&x->x_obj, &s_list);
-
-  // create outlets for activations from right to left
-  for (int i = 1; i < x->num_outlets; i++) {
-    x->layer_outlets[i] = outlet_new(&x->x_obj, &s_float);
-  }
+  x->output_outlet = outlet_new(&x->x_obj, &s_list);
 
   x->iterator = 0; // tracks the current iteration
 
@@ -840,7 +899,6 @@ void nnseq_setup(void)
                   gensym("set_lambda"), A_DEFFLOAT, 0);
   class_addmethod(nnseq_class, (t_method)get_cost,
                   gensym("cost"), 0);
-
   class_addmethod(nnseq_class, (t_method)set_layer_weights,
                   gensym("set_weights"), A_GIMME, 0);
   class_addmethod(nnseq_class, (t_method)set_layer_biases,
@@ -849,4 +907,8 @@ void nnseq_setup(void)
                   gensym("verbose"), 0);
   class_addmethod(nnseq_class, (t_method)clear_layers,
                   gensym("clear_layers"), 0);
+  class_addmethod(nnseq_class, (t_method)output_layers,
+                  gensym("output_layers"), A_GIMME, 0);
+  class_addmethod(nnseq_class, (t_method)output_types,
+                  gensym("output_types"), A_GIMME, 0);
 }
