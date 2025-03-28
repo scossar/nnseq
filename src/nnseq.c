@@ -35,6 +35,16 @@ static void nnseq_free(t_nnseq *x)
                 sizeof(t_float));
         x->layers[i].dw = NULL;
       }
+      if (x->layers[i].v_dw != NULL) {
+        freebytes(x->layers[i].v_dw, x->layers[i].n * x->layers[i].n_prev *
+                sizeof(t_float));
+        x->layers[i].v_dw = NULL;
+      }
+      if (x->layers[i].s_dw != NULL) {
+        freebytes(x->layers[i].s_dw, x->layers[i].n * x->layers[i].n_prev *
+                sizeof(t_float));
+        x->layers[i].s_dw = NULL;
+      }
 
       // biases and db
       if (x->layers[i].biases != NULL) {
@@ -44,6 +54,14 @@ static void nnseq_free(t_nnseq *x)
       if (x->layers[i].db != NULL) {
         freebytes(x->layers[i].db, x->layers[i].n * sizeof(t_float));
         x->layers[i].db = NULL;
+      }
+      if (x->layers[i].v_db != NULL) {
+        freebytes(x->layers[i].v_db, x->layers[i].n * sizeof(t_float));
+        x->layers[i].v_db = NULL;
+      }
+      if (x->layers[i].s_db != NULL) {
+        freebytes(x->layers[i].s_db, x->layers[i].n * sizeof(t_float));
+        x->layers[i].s_db = NULL;
       }
 
       // z and dz
@@ -306,6 +324,16 @@ static void set_lambda(t_nnseq *x, t_floatarg f)
   x->lambda = f;
 }
 
+static void set_beta(t_nnseq *x, t_floatarg f)
+{
+  x->beta = f;
+}
+
+static void set_beta_rmsprop(t_nnseq *x, t_floatarg f)
+{
+  x->beta = f;
+}
+
 static int init_layers(t_nnseq *x)
 {
   x->layers = (t_layer *)getbytes(sizeof(t_layer) * x->num_layers);
@@ -333,21 +361,53 @@ static int init_layers(t_nnseq *x)
       pd_error(x, "nnseq: failed to allocate memory for layer weights");
       return 0;
     }
+
     layer->dw = (t_float *)getbytes(sizeof(t_float) * layer->n * layer->n_prev);
     if (layer->dw == NULL) {
       pd_error(x, "nnseq: failed to allocate memory for layer dw");
       return 0;
     }
+
+    layer->v_dw = (t_float *)getbytes(sizeof(t_float) * layer->n * layer->n_prev);
+    if (layer->v_dw == NULL) {
+      pd_error(x, "nnseq: failed to allocate memory for layer v_dw");
+      return 0;
+    }
+    memset(layer->v_dw, 0, sizeof(t_float) * layer->n * layer->n_prev);
+
+    layer->s_dw = (t_float *)getbytes(sizeof(t_float) * layer->n * layer->n_prev);
+    if (layer->s_dw == NULL) {
+      pd_error(x, "nnseq: failed to allocate memory for layer s_dw");
+      return 0;
+    }
+    memset(layer->s_dw, 0, sizeof(t_float) * layer->n * layer->n_prev);
+
     layer->biases = (t_float *)getbytes(sizeof(t_float) * layer->n);
     if (layer->biases == NULL) {
       pd_error(x, "nnseq: failed to allocate memory for layer biases");
       return 0;
     }
+
     layer->db = (t_float *)getbytes(sizeof(t_float) * layer->n);
     if (layer->db == NULL) {
       pd_error(x, "nnseq: failed to allocate memory for layer db");
       return 0;
     }
+
+    layer->v_db = (t_float *)getbytes(sizeof(t_float) * layer->n);
+    if (layer->v_db == NULL) {
+      pd_error(x, "nnseq: failed to allocate memory for layer v_db");
+      return 0;
+    }
+    memset(layer->v_db, 0, sizeof(t_float) * layer->n);
+
+    layer->s_db = (t_float *)getbytes(sizeof(t_float) * layer->n);
+    if (layer->s_db == NULL) {
+      pd_error(x, "nnseq: failed to allocate memory for layer s_db");
+      return 0;
+    }
+    memset(layer->s_db, 0, sizeof(t_float) * layer->n);
+
     layer->z_cache = (t_float *)getbytes(sizeof(t_float) * layer->n * x->batch_size);
     if (layer->z_cache == NULL) {
       pd_error(x, "nnseq: failed to allocate memory for layer z_cache");
@@ -569,6 +629,45 @@ static void update_parameters_with_l2(t_nnseq *x)
   }
 }
 
+static void update_parameters_with_momentum(t_nnseq *x)
+{
+  for (int l = 0; l < x->num_layers; l++) {
+    t_layer *layer = &x->layers[l];
+    int n_neurons = layer->n;
+    int n_inputs = layer->n_prev;
+
+    for (int i = 0; i < n_neurons * n_inputs; i++) {
+      layer->v_dw[i] = x->beta * layer->v_dw[i] + (1 - x->beta) * layer->dw[i];
+      layer->weights[i] -= x->alpha * layer->v_dw[i];
+    }
+
+    for (int i = 0; i < n_neurons; i++) {
+      layer->v_db[i] = x->beta * layer->v_db[i] + (1 - x->beta) * layer->db[i];
+      layer->biases[i] -= x->alpha * layer->v_db[i];
+    }
+  }
+}
+
+static void update_parameters_with_rmsprop(t_nnseq *x)
+{
+  for (int l = 0; l < x->num_layers; l++) {
+    t_layer *layer = &x->layers[l];
+    int n_neurons = layer->n;
+    int n_inputs = layer->n_prev;
+    float epsilon = 1e-8;
+
+    for (int i = 0; i < n_neurons * n_inputs; i++) {
+      layer->s_dw[i] = x->beta_rmsprop * layer->s_dw[i] + (1 - x->beta_rmsprop) * layer->dw[i] * layer->dw[i];
+      layer->weights[i] -= x->alpha * layer->dw[i] / sqrt(layer->s_dw[i] + epsilon);
+    }
+
+    for (int i = 0; i < n_neurons; i++) {
+      layer->s_db[i] = x->beta_rmsprop * layer->s_db[i] + (1 - x->beta_rmsprop) * layer->db[i] * layer->db[i];
+      layer->biases[i] -= x->alpha * layer->db[i] / sqrt(layer->s_db[i] + epsilon);
+    }
+  }
+}
+
 static void layer_backward(t_nnseq *x, int l)
 {
   t_layer *current_layer = &x->layers[l];
@@ -624,9 +723,21 @@ static void nnseq_bang(t_nnseq *x)
 {
   model_forward(x);
   model_backward(x);
-  // TODO: make this configurable
-  /*update_parameters(x);*/
-  update_parameters_with_l2(x);
+
+  switch (x->optimizer) {
+    case OPTIMIZATION_L2:
+      update_parameters_with_l2(x);
+      break;
+    case OPTIMIZATION_MOMENTUM:
+      update_parameters_with_momentum(x);
+      break;
+    case OPTIMIZATION_RMSPROP:
+      update_parameters_with_rmsprop(x);
+      break;
+    case OPTIMIZATION_GD:
+    default:
+      update_parameters(x);
+  }
 
   if (x->output_config.num_layers_to_output <= 0) {
     x->iterator++;
@@ -781,8 +892,12 @@ static void clear_layers(t_nnseq *x)
     memset(layer->da, 0, sizeof(t_float) * output_size);
     memset(layer->weights, 0, sizeof(t_float) * w_size);
     memset(layer->dw, 0, sizeof(t_float) * w_size);
+    memset(layer->v_dw, 0, sizeof(t_float) * w_size);
+    memset(layer->s_dw, 0, sizeof(t_float) * w_size);
     memset(layer->biases, 0, sizeof(t_float) * n);
     memset(layer->db, 0, sizeof(t_float) * n);
+    memset(layer->v_db, 0, sizeof(t_float) * n);
+    memset(layer->s_db, 0, sizeof(t_float) * n);
   }
 }
 
@@ -862,6 +977,8 @@ static void *nnseq_new(t_symbol *s, int argc, t_atom *argv)
   x->output_config.output_activations = 1; // default to outputting activations
   x->output_config.output_gradients = 0; // probably going to change this anyway
 
+  x->optimizer = OPTIMIZATION_GD;
+
   // first arg is batch_size
   x->batch_size = atom_getfloat(argv++);
   
@@ -890,7 +1007,8 @@ static void *nnseq_new(t_symbol *s, int argc, t_atom *argv)
   x->alpha = 0.01; // default
   x->leak = 0.01; // default
   x->lambda = 0.01; // default
-
+  x->beta = 0.9; // default momentum param
+  x->beta_rmsprop = 0.99;
 
   x->seq_outlet = outlet_new(&x->x_obj, &s_list);
   x->output_outlet = outlet_new(&x->x_obj, &s_list);
@@ -914,6 +1032,8 @@ void nnseq_setup(void)
   class_addmethod(nnseq_class, (t_method)model_info, gensym("info"), 0);
   class_addmethod(nnseq_class, (t_method)set_layer_activation,
                   gensym("set_activation"), A_GIMME, 0);
+  class_addmethod(nnseq_class, (t_method)set_optimization_method,
+                  gensym("set_optimizer"), A_SYMBOL, 0);
   class_addmethod(nnseq_class, (t_method)get_layer_activation,
                   gensym("get_activation"), A_FLOAT, 0);
   class_addmethod(nnseq_class, (t_method)set_x_input,
@@ -930,6 +1050,10 @@ void nnseq_setup(void)
                   gensym("set_leak"), A_DEFFLOAT, 0);
   class_addmethod(nnseq_class, (t_method)set_lambda,
                   gensym("set_lambda"), A_DEFFLOAT, 0);
+  class_addmethod(nnseq_class, (t_method)set_beta,
+                  gensym("set_beta"), A_DEFFLOAT, 0);
+  class_addmethod(nnseq_class, (t_method)set_beta_rmsprop,
+                  gensym("set_beta_rmsprop"), A_DEFFLOAT, 0);
   class_addmethod(nnseq_class, (t_method)get_cost,
                   gensym("cost"), 0);
   class_addmethod(nnseq_class, (t_method)set_layer_weights,

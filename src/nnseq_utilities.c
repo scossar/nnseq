@@ -22,6 +22,7 @@ t_symbol* activation_to_symbol(t_layer *l)
   }
 }
 
+// TODO: remove references to fmodel
 void set_layer_activation(t_nnseq *x, t_symbol *s, int argc, t_atom *argv)
 {
   if (argc != 2) {
@@ -48,6 +49,23 @@ void set_layer_activation(t_nnseq *x, t_symbol *s, int argc, t_atom *argv)
     x->layers[layer_idx].activation = ACTIVATION_LINEAR;
   } else {
     pd_error(x, "fmodel: unknown activation type '%s'", act_type->s_name);
+  }
+}
+
+void set_optimization_method(t_nnseq *x, t_symbol *optimizer)
+{
+  if (optimizer == gensym("gd")) {
+    x->optimizer = OPTIMIZATION_GD;
+  } else if (optimizer == gensym("l2")) {
+    x->optimizer = OPTIMIZATION_L2;
+  } else if (optimizer == gensym("momentum")) {
+    x->optimizer = OPTIMIZATION_MOMENTUM;
+  } else if (optimizer == gensym("rmsprop")) {
+    x->optimizer = OPTIMIZATION_RMSPROP;
+  } else if (optimizer == gensym("adam")) {
+    x->optimizer = OPTIMIZATION_ADAM;
+  } else {
+    pd_error(x, "nnseq: unknown optimizer '%s'", optimizer->s_name);
   }
 }
 

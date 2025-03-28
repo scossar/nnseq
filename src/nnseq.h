@@ -11,6 +11,14 @@ typedef enum {
   ACTIVATION_RELU
 } t_activation_type;
 
+typedef enum {
+  OPTIMIZATION_GD,
+  OPTIMIZATION_L2,
+  OPTIMIZATION_MOMENTUM,
+  OPTIMIZATION_RMSPROP,
+  OPTIMIZATION_ADAM
+} t_optimizer;
+
 typedef struct _output_config {
   int *layer_indices; // array of layer indices to output
   int num_layers_to_output;
@@ -26,8 +34,12 @@ typedef struct _layer {
 
   t_float *weights;
   t_float *dw;
+  t_float *v_dw;
+  t_float *s_dw;
   t_float *biases;
   t_float *db;
+  t_float *v_db;
+  t_float *s_db;
   t_float *z_cache;
   t_float *dz;
   t_float *a_cache;
@@ -43,6 +55,9 @@ typedef struct _nnseq {
   t_float alpha;
   t_float leak;
   t_float lambda;
+  t_float beta;
+  t_float beta_rmsprop;
+  t_optimizer optimizer;
 
   int iterator; // Current step in the sequence
 
@@ -59,6 +74,7 @@ typedef struct _nnseq {
 
 t_symbol* activation_to_symbol(t_layer *l);
 void set_layer_activation(t_nnseq *x, t_symbol *s, int argc, t_atom *argv);
+void set_optimization_method(t_nnseq *x, t_symbol *optimizer);
 void model_info(t_nnseq *x);
 t_float apply_activation(t_nnseq *x, t_int l, t_float z);
 float he_init(int n_prev);
