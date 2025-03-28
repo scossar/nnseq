@@ -85,6 +85,10 @@ static void nnseq_free(t_nnseq *x)
     outlet_free(x->output_outlet);
     x->output_outlet = NULL;
   }
+  if (x->seq_outlet != NULL) {
+    outlet_free(x->seq_outlet);
+    x->seq_outlet = NULL;
+  }
   if (x->input_inlet != NULL) {
     inlet_free(x->input_inlet);
     x->input_inlet = NULL;
@@ -624,27 +628,37 @@ static void nnseq_bang(t_nnseq *x)
   /*update_parameters(x);*/
   update_parameters_with_l2(x);
 
-  // layer activations (outlets 1 through num_outlets - 1)
-  // the output layer will be at layer_outlets[1] (second left most outlet)
-  // the second to last layer will be at layer_outlets[2], etc
-  for (int i = 1; i < x->num_outlets; i++) {
-    int layer_idx = x->num_layers - (i - 1) - 1;
-    if (layer_idx < 0) break; // just in case
+  if (x->output_config.num_layers_to_output <= 0) {
+    x->iterator++;
+    return;
+  }
 
+  t_atom *output_list = NULL;
+  int list_size = 0;
+  int max_size = x->output_config.num_layers_to_output;
+
+  output_list = (t_atom *)getbytes(max_size * sizeof(t_atom));
+  if (output_list == NULL) {
+    pd_error(x, "nnseq: failed to allocate memory for output list");
+    return;
+  }
+
+  for (int output_idx = 0; output_idx < x->output_config.num_layers_to_output; output_idx++) {
+    int layer_idx = x->output_config.layer_indices[output_idx];
     t_layer *layer = &x->layers[layer_idx];
 
-    // cycle through all activations in layer
-    int activation_idx = x->iterator % (layer->n * x->batch_size);
+    int total_activations = layer->n * x->batch_size;
+    int activation_idx = x->iterator % total_activations;
+    t_float activation = layer->a_cache[activation_idx];
 
-    // isn't there an unnecessary step here? (probably, but it opens up other
-    // options for accessing the values)
-    int neuron_idx = activation_idx / x->batch_size;
-    int batch_idx = activation_idx % x->batch_size;
-
-    t_float activation = layer->a_cache[neuron_idx * x->batch_size + batch_idx];
-
-    outlet_float(x->layer_outlets[i], activation);
+    SETFLOAT(&output_list[list_size], activation);
+    list_size++;
   }
+
+  outlet_list(x->seq_outlet, &s_list, list_size, output_list);
+  freebytes(output_list, max_size * sizeof(t_atom));
+  output_list = NULL;
+
   x->iterator++;
 }
 
@@ -780,12 +794,30 @@ static void output_layers(t_nnseq *x, t_symbol *s, int argc, const t_atom *argv)
               x->output_config.num_layers_to_output * sizeof(int));
   }
 
+  x->output_config.num_layers_to_output = argc;
+
+  if (argc == 0) {
+    return;
+  }
+
+  // allocate memory
+  x->output_config.layer_indices = (int *)getbytes(argc * sizeof(int));
+  if (x->output_config.layer_indices == NULL) {
+    pd_error(x, "nnseq: failed to allocate memory for layer indices");
+    x->output_config.num_layers_to_output = 0;
+    return;
+  }
+
   for (int i = 0; i < argc; i++) {
     int layer_idx = (int)atom_getfloat(&argv[i]);
 
-    if (layer_idx < 0 || layer_idx >= x->num_layers) {
-      pd_error(x, "nnseq: invalid layer index %d", layer_idx);
-      layer_idx = 0; // default to 0, or don't?
+    // clamp to valid range
+    if (layer_idx < 0) {
+      pd_error(x, "nnseq: layer index %d out of range, clamping to 0", layer_idx);
+      layer_idx = 0;
+    } else if (layer_idx >= x->num_layers) {
+      pd_error(x, "nnseq: layer index %d out of range, clampint to %d",
+               layer_idx, x->num_layers - 1);
     }
 
     x->output_config.layer_indices[i] = layer_idx;
@@ -860,6 +892,7 @@ static void *nnseq_new(t_symbol *s, int argc, t_atom *argv)
   x->lambda = 0.01; // default
 
 
+  x->seq_outlet = outlet_new(&x->x_obj, &s_list);
   x->output_outlet = outlet_new(&x->x_obj, &s_list);
 
   x->iterator = 0; // tracks the current iteration

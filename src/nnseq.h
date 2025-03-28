@@ -52,9 +52,8 @@ typedef struct _nnseq {
   t_float *y_labels;
 
   t_inlet *input_inlet;
-  // t_outlet **layer_outlets; // array of outlets for layer activations
-  // int num_outlets; // number of layer outlets
-  t_outlet *output_outlet;
+  t_outlet *output_outlet; // maybe rename?
+  t_outlet *seq_outlet;
   t_output_config output_config;
 } t_nnseq;
 
